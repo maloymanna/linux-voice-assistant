@@ -1,6 +1,31 @@
 #!/bin/bash
-# read-aloud.sh - Application-aware read aloud
+# read-aloud.sh - Application-aware read aloud with stop toggle
 set -euo pipefail
+
+# ------------------- Toggle / Stop -------------------
+PIDFILE="/tmp/read-aloud.pid"
+
+if [[ -f "$PIDFILE" ]]; then
+  old_pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+    # Stop running instance and its children
+    pkill -P "$old_pid" 2>/dev/null || true
+    kill -TERM "$old_pid" 2>/dev/null || true
+    pkill -f "piper" 2>/dev/null || true
+    pkill -f "pacat" 2>/dev/null || true
+    pkill -f "paplay" 2>/dev/null || true
+    rm -f "$PIDFILE"
+    notify-send -t 1200 -u low "Read Aloud" "Stopped."
+    exit 0
+  else
+    rm -f "$PIDFILE"
+  fi
+fi
+
+# Mark ourselves as the active reader
+echo $$ > "$PIDFILE"
+cleanup() { rm -f "$PIDFILE"; }
+trap cleanup EXIT INT TERM
 
 # ------------------- Configuration -------------------
 PIPER_BIN="${PIPER_BIN:-$HOME/.local/lib/piper-tts/.venv/bin/piper}"
@@ -87,7 +112,11 @@ speak_text() {
   ( set +o pipefail
     printf '%s' "$text" | "$PIPER_BIN" --model "$PIPER_VOICE" --output-raw | $PLAY_CMD
   ) || {
-    notify-send -t 3000 -u critical "Read Aloud Error" "Audio playback failed."
+    # Only show error if we were NOT stopped by another instance.
+    # The toggle logic removes /tmp/read-aloud.pid when stopping us.
+    if [[ -f "$PIDFILE" ]] && [[ "$(cat "$PIDFILE" 2>/dev/null)" == "$$" ]]; then
+      notify-send -t 3000 -u critical "Read Aloud Error" "Audio playback failed."
+    fi
     return 1
   }
 }
@@ -169,7 +198,6 @@ get_evince_current_page() {
   local pdf_path="$1"
   local page=""
   if command -v gio &>/dev/null; then
-    # gio stores Evince's internal 0-based page index in metadata::evince::page
     page="$(gio info -a "metadata::evince::page" "$pdf_path" 2>/dev/null \
       | grep -oP 'metadata::evince::page: \K[0-9]+' || true)"
     if [[ -n "$page" ]]; then
@@ -292,19 +320,19 @@ case "$app_class" in
   evince|org.gnome.evince)
     notify-send -t 1000 -u low "Read Aloud" "PDF detected..."
 
-    clipboard_before="$(get_clipboard)"
+    # Clear clipboard so we can reliably detect a selection on restart.
+    printf '' | xclip -selection clipboard -in 2>/dev/null || true
+    sleep 0.1
     xdotool key --clearmodifiers ctrl+c
     sleep 0.5
     clipboard_after="$(get_clipboard)"
-    log "Evince clipboard before: len=${#clipboard_before}"
     log "Evince clipboard after:  len=${#clipboard_after}"
 
-    if [[ -n "$clipboard_after" && "$clipboard_after" != "$clipboard_before" ]]; then
+    if [[ -n "$clipboard_after" ]]; then
       text="$clipboard_after"
       source_name="pdf-selection"
       notify-send -t 1500 -u low "Read Aloud" "Reading selected PDF text."
     else
-      # No selection detected. Try current-page fallback.
       pdf_path="$(get_evince_pdf_path || true)"
       log "PDF path: ${pdf_path:-<none>}"
 
@@ -325,7 +353,6 @@ case "$app_class" in
         fi
       fi
 
-      # If still no text, fail gracefully (Option 1)
       if [[ -z "$text" ]]; then
         notify-send -t 4000 -u normal \
           "Read Aloud" \
@@ -340,10 +367,16 @@ case "$app_class" in
   # FBREADER
   # ------------------------------------------------------------------
   fbreader|fbreader2|org.fbreader.*)
-    text="$(get_primary_selection)"
+    # Clear clipboard and copy from the ACTIVE window so we never read
+    # stale PRIMARY text from a previously focused application.
+    printf '' | xclip -selection clipboard -in 2>/dev/null || true
+    sleep 0.1
+    xdotool key --clearmodifiers ctrl+c
+    sleep 0.5
+    text="$(get_clipboard)"
     if [[ -n "$text" ]]; then
-      source_name="primary"
-      log "Using PRIMARY selection, length=${#text}"
+      source_name="epub-selection"
+      log "Using FBReader selection via Ctrl+C, length=${#text}"
     fi
 
     if [[ -z "$text" ]]; then
@@ -371,10 +404,16 @@ case "$app_class" in
   # BROWSERS
   # ------------------------------------------------------------------
   firefox|navigator|chrome|chromium|chromium-browser|brave|vivaldi|opera)
-    text="$(get_primary_selection)"
+    # Clear clipboard and copy from the ACTIVE window so we never read
+    # stale PRIMARY text from a previously focused application.
+    printf '' | xclip -selection clipboard -in 2>/dev/null || true
+    sleep 0.1
+    xdotool key --clearmodifiers ctrl+c
+    sleep 0.5
+    text="$(get_clipboard)"
     if [[ -n "$text" ]]; then
-      source_name="primary"
-      log "Using PRIMARY selection, length=${#text}"
+      source_name="browser-selection"
+      log "Using browser selection via Ctrl+C, length=${#text}"
     fi
 
     if [[ -z "$text" ]] && [[ ! -t 0 ]]; then
@@ -386,8 +425,14 @@ case "$app_class" in
       sleep 0.5
       text="$(get_clipboard)"
       if [[ -n "$text" ]]; then
+        # Hard cap for safety
+        if [[ ${#text} -gt 50000 ]]; then
+          text="${text:0:50000}"
+          notify-send -t 2000 -u low "Read Aloud" "Reading first 50 KB of page.\nYour clipboard was overwritten."
+        else
+          notify-send -t 2000 -u low "Read Aloud" "Reading full page.\nYour clipboard was overwritten."
+        fi
         source_name="browser-all"
-        notify-send -t 2000 -u low "Read Aloud" "Reading full page.\nYour clipboard was overwritten."
       fi
     fi
     ;;
@@ -430,6 +475,7 @@ case "$app_class" in
       sleep 0.5
       text="$(get_clipboard)"
       if [[ -n "$text" ]]; then
+        [[ ${#text} -gt 50000 ]] && text="${text:0:50000}"
         source_name="clipboard-auto"
       fi
     fi
@@ -453,10 +499,10 @@ case "$source_name" in
   pdf-selection|pdf-page)
     ;;
   epub-full)
-    notify-send -t 1500 -u low "Read Aloud" "Reading full e-book text."
+    notify-send -t 1500 -u low "Read Aloud" "Reading e-book text (capped at 50 KB)."
     ;;
   clipboard-auto)
-    notify-send -t 1500 -u low "Read Aloud" "Used Ctrl+C fallback.\nYour clipboard was overwritten."
+    notify-send -t 1500 -u low "Read Aloud" "Used Ctrl+C fallback (capped at 50 KB).\nYour clipboard was overwritten."
     ;;
 esac
 
