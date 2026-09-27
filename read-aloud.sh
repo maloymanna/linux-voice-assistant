@@ -3,7 +3,7 @@
 # Reads selected text aloud using Piper TTS.
 #
 # XFCE hotkeys do NOT source ~/.bashrc. If piper is in a venv, set the
-# hotkey command to: bash -lc "~/.local/bin/read-aloud.sh"
+# hotkey command to: bash -ic "~/.local/bin/read-aloud.sh"
 #
 # How it works:
 #   1. Tries to read the current mouse selection (PRIMARY) using multiple
@@ -23,19 +23,20 @@
 #     Use the XFCE hotkey for full functionality.
 #
 # Bind in XFCE: Settings > Keyboard > Application Shortcuts
-# Recommended hotkey: Ctrl+Alt+R
+# Recommended hotkey: Super+R
 
 set -euo pipefail
 
 # ------------------- Configuration -------------------
-# If piper is not in your PATH when XFCE runs the hotkey, hardcode it:
+# If piper is not in your PATH when XFCE runs the hotkey, hardcode it
 # PIPER_BIN="/home/yourname/.local/lib/piper-tts/.venv/bin/piper"
-PIPER_BIN="${PIPER_BIN:-piper}"
-
+#PIPER_BIN="${PIPER_BIN:-piper}"
+PIPER_BIN="${PIPER_BIN:-$HOME/.local/lib/piper-tts/.venv/bin/piper}"
 PIPER_VOICE="${PIPER_VOICE:-$HOME/.local/share/piper-voices/en_US-lessac-medium.onnx}"
 
 # PulseAudio raw PCM playback command
-PLAY_CMD="paplay --raw --rate=22050 --channels=1 --format=s16le"
+#PLAY_CMD="paplay --raw --rate=22050 --channels=1 --format=s16le"
+PLAY_CMD="pacat --playback --rate=22050 --channels=1 --format=s16le"
 
 # ------------------- Functions -------------------
 
@@ -71,6 +72,7 @@ speak_text() {
 
   # Stop any currently playing speech
   pkill -f "piper" 2>/dev/null || true
+  pkill -f "pacat" 2>/dev/null || true
   pkill -f "paplay" 2>/dev/null || true
   sleep 0.1
 
@@ -83,6 +85,22 @@ speak_text() {
 }
 
 # ------------------- Main -------------------
+
+# Verify dependencies exist and tell the user if something is missing
+if ! command -v "$PIPER_BIN" &>/dev/null; then
+  notify-send -t 4000 -u critical "Read Aloud Error" "piper not found at $PIPER_BIN"
+  exit 1
+fi
+
+if ! command -v xclip &>/dev/null; then
+  notify-send -t 4000 -u critical "Read Aloud Error" "xclip not found. Install with: sudo apt install xclip"
+  exit 1
+fi
+
+if ! command -v pacat &>/dev/null && ! command -v paplay &>/dev/null; then
+  notify-send -t 4000 -u critical "Read Aloud Error" "pacat/paplay not found. Install pulseaudio-utils"
+  exit 1
+fi
 
 text=""
 source_name="none"
