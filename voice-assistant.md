@@ -4,9 +4,10 @@ A lightweight, local voice assistant for Linux using [whisper.cpp](https://githu
 
 ## Features
 
-- **Two modes**:
+- **Three modes**:
   - `echo` - transcribe, copy to clipboard, and speak back what you said.
   - `stt` - transcribe and copy to clipboard only.
+  - `long` - transcribe up to 5 minutes (configurable in the script) and copy to clipboard (same as STT with extended duration)
 - **Voice Control Words**: Say "pause", "resume", or "stop" (all configurable) to control the recording state hands-free.
 - **Smart Timer**: Time spent in paused mode is **excluded** from the 30-second maximum recording limit.
 - **Privacy by Design**: Audio spoken while paused is recorded to a temporary buffer and permanently discarded (byte-skipped) upon resuming. It is never transcribed.
@@ -81,6 +82,9 @@ cp voice-assistant.sh ~/.local/bin/
 
 # STT mode: transcribe and copy to clipboard only
 ./voice-assistant.sh stt
+
+# Long mode: transcribe up to 5 minutes and copy to clipboard
+./voice-assistant.sh long
 ```
 
 ### Environment variables
@@ -96,7 +100,7 @@ cp voice-assistant.sh ~/.local/bin/
 | `SLEEPWORD` | `stop` | Word to say to end recording |
 | `PAUSEWORD` | `pause` | Word to say to pause recording |
 | `RESUMEWORD` | `resume` | Word to say to resume recording |
-| `MAX_RECORD_SECONDS` | `30` | Maximum recording duration |
+| `MAX_RECORD_SECONDS` | `30 (300 for long mode)` | Maximum recording duration |
 | `CHECK_CHUNK_SECONDS` | `3` | Audio chunk size for stop-word checker (3s provides high overlap) |
 | `CHECK_INTERVAL` | `0.5` | How often the checker runs (seconds) |
 
@@ -111,6 +115,12 @@ WHISPER_MODEL=~/dev/ai/whisper.cpp/models/ggml-small.bin ./voice-assistant.sh ec
 
 # Custom control words
 SLEEPWORD="done" PAUSEWORD="hold" RESUMEWORD="pickup" ./voice-assistant.sh echo
+
+# Long mode for extended dictation (5 minutes)
+./voice-assistant.sh long
+
+# Override long mode duration (e.g., 10 minutes)
+MAX_RECORD_SECONDS=600 ./voice-assistant.sh long
 ```
 
 ## Keyboard Shortcut Setup (XFCE)

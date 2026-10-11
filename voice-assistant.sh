@@ -31,7 +31,14 @@ PAUSEWORD="${PAUSEWORD:-pause}"
 RESUMEWORD="${RESUMEWORD:-resume}"
 CHECK_CHUNK_SECONDS="${CHECK_CHUNK_SECONDS:-3}"
 CHECK_INTERVAL="${CHECK_INTERVAL:-0.5}"
-MODE="${1:-echo}"
+MODE="${1:-echo}"   # echo | stt | long
+
+# Set max recording time based on mode
+if [[ "$MODE" == "long" ]]; then
+    MAX_RECORD_SECONDS="${MAX_RECORD_SECONDS:-300}"
+else
+    MAX_RECORD_SECONDS="${MAX_RECORD_SECONDS:-30}"
+fi
 
 CHECK_BYTES=$((CHECK_CHUNK_SECONDS * 16000 * 2))
 
@@ -268,7 +275,6 @@ timeout 60 "$WHISPER_BIN" \
     -t "$WHISPER_THREADS" --no-timestamps -otxt -of "${RAW_TEXT_FILE%.txt}" >/dev/null 2>&1 || true
 
 raw_text="$(cat "$RAW_TEXT_FILE" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ *//; s/ *$//' || true)"
-printf '%s\n' "$raw_text"
 
 # Globally remove all instances of control words, BLANK_AUDIO, and normalize spaces
 # Also clean up pause artifacts: multiple periods, ". ." patterns, etc.
@@ -282,11 +288,15 @@ cleaned_text="$(printf '%s' "$raw_text" | \
     sed 's/^ *//; s/ *$//')"
 log "Cleaned text: ${cleaned_text:-<empty>}"
 
+# Print cleaned text to stdout (control words removed)
+printf '%s\n' "$cleaned_text"
+
 if [[ -z "$cleaned_text" ]]; then
     notify-send -t 2000 -u normal "Voice Assistant" "Could not transcribe audio."
     exit 0
 fi
 
+# ------------------- Mode output -------------------
 if [[ "$MODE" == "echo" ]]; then
     printf '%s' "$cleaned_text" | xclip -selection clipboard -in 2>/dev/null || true
     notify-send -t 4000 -u low "Voice Assistant (Echo)" "$cleaned_text"
@@ -298,9 +308,14 @@ if [[ "$MODE" == "echo" ]]; then
         printf '%s' "$cleaned_text" | "$PIPER_BIN" --model "$PIPER_VOICE" --output-raw | $PLAY_CMD
     ) || notify-send -t 3000 -u critical "Voice Assistant Error" "Audio playback failed."
     
-elif [[ "$MODE" == "stt" ]]; then
+elif [[ "$MODE" == "stt" || "$MODE" == "long" ]]; then
     printf '%s' "$cleaned_text" | xclip -selection clipboard -in 2>/dev/null || true
-    notify-send -t 4000 -u low "Voice Assistant (STT)" "$cleaned_text"
+    notify-send -t 4000 -u low "Voice Assistant (${MODE^^})" "$cleaned_text"
+    log "${MODE^^} mode: copied transcription to clipboard"
+else
+    notify-send -t 3000 -u critical "Voice Assistant Error" "Unknown mode: $MODE. Use 'echo', 'stt', or 'long'."
+    log "Unknown mode: $MODE"
+    exit 1    
 fi
 
 log "Finished successfully."
