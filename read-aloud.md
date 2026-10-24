@@ -106,4 +106,4 @@ If the audio pipeline dies from being killed, the old instance checks whether th
 
 ## License
 
-MIT / Public Domain — use and modify freely.
+[MIT](/LICENSE)

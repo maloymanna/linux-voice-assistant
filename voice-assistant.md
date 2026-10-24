@@ -171,4 +171,4 @@ You spoke for less than 1 second, or the microphone is not capturing audio. Chec
 
 ## License
 
-MIT (same as whisper.cpp)
+[MIT](/LICENSE)

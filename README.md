@@ -9,3 +9,6 @@ A lightweight, local voice assistant for Linux using [whisper.cpp](https://githu
 
 ## [voice-assistant.sh](voice-assistant.md):
 Updated version with support for **pause**, **resume** and **stop** control words (configurable in the script).
+
+## License  
+[MIT](/LICENSE)
