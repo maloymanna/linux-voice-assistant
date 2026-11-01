@@ -21,11 +21,17 @@ WHISPER_MODEL="${WHISPER_MODEL:-$HOME/dev/ai/whisper.cpp/models/ggml-tiny.en.bin
 WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-en}"
 WHISPER_THREADS="${WHISPER_THREADS:-$(nproc)}"
 CHECK_MODEL="${CHECK_MODEL:-$HOME/dev/ai/whisper.cpp/models/ggml-tiny.en.bin}"
+
+# Parakeet.cpp for final transcription (Q8_0 GGUF)
+PARAKEET_BIN="${PARAKEET_BIN:-$HOME/dev/ai/parakeet.cpp/build/examples/cli/parakeet-cli}"
+PARAKEET_MODEL="${PARAKEET_MODEL:-$HOME/dev/ai/parakeet.cpp/models/tdt_ctc-110m-q8_0.gguf}"
+PARAKEET_VAD_MODEL="${PARAKEET_VAD_MODEL:-$HOME/dev/ai/parakeet.cpp/models/silero-vad-f16.gguf}"
+
 PIPER_BIN="${PIPER_BIN:-$HOME/.local/lib/piper-tts/.venv/bin/piper}"
 PIPER_VOICE="${PIPER_VOICE:-$HOME/.local/share/piper-voices/en_US-lessac-medium.onnx}"
 PLAY_CMD="pacat --playback --rate=22050 --channels=1 --format=s16le"
 
-MAX_RECORD_SECONDS="${MAX_RECORD_SECONDS:-30}"
+# MAX_RECORD_SECONDS="${MAX_RECORD_SECONDS:-30}"
 SLEEPWORD="${SLEEPWORD:-stop}"
 PAUSEWORD="${PAUSEWORD:-pause}"
 RESUMEWORD="${RESUMEWORD:-resume}"
@@ -68,6 +74,10 @@ if ! command -v arecord &>/dev/null; then
 fi
 if ! command -v "$WHISPER_BIN" &>/dev/null 2>&1; then
     notify-send -t 4000 -u critical "Voice Assistant Error" "Whisper binary not found."
+    exit 1
+fi
+if [[ ! -x "$PARAKEET_BIN" ]]; then
+    notify-send -t 4000 -u critical "Voice Assistant Error" "Parakeet binary not found at $PARAKEET_BIN"
     exit 1
 fi
 
@@ -229,12 +239,25 @@ if [[ "$is_paused" -eq 1 ]]; then
     log "Closed pause boundary at stop: $pause_start to $pause_end"
 fi
 
+# Signal checker to exit its loop (timeout path never creates STOPFILE)
+touch "$STOPFILE" 2>/dev/null || true
+
 if [[ -n "${rec_pid:-}" ]]; then
     kill "$rec_pid" 2>/dev/null || true
+    sleep 0.3
+    kill -9 "$rec_pid" 2>/dev/null || true
     wait "$rec_pid" 2>/dev/null || true
 fi
-kill -- -"$checker_pid" 2>/dev/null || true
-wait "$checker_pid" 2>/dev/null || true
+
+if [[ -n "${checker_pid:-}" ]]; then
+    kill "$checker_pid" 2>/dev/null || true
+    sleep 0.3
+    kill -9 "$checker_pid" 2>/dev/null || true
+    wait "$checker_pid" 2>/dev/null || true
+fi
+
+# kill -- -"$checker_pid" 2>/dev/null || true
+# wait "$checker_pid" 2>/dev/null || true
 
 > "$FULL_RAW"
 current_pos=0
@@ -268,11 +291,17 @@ fi
 
 { build_wav_header "$audio_size"; cat "$FULL_RAW"; } > "$FULL_RAW.wav"
 
-notify-send -t 1000 -u low "Voice Assistant" "Transcribing..."
+notify-send -t 1000 -u low "Voice Assistant" "Transcribing with Parakeet..."
 rm -f "$RAW_TEXT_FILE"
-timeout 60 "$WHISPER_BIN" \
-    -m "$WHISPER_MODEL" -f "$FULL_RAW.wav" -l "$WHISPER_LANGUAGE" \
-    -t "$WHISPER_THREADS" --no-timestamps -otxt -of "${RAW_TEXT_FILE%.txt}" >/dev/null 2>&1 || true
+
+# Run parakeet-cli transcribe with VAD for robust long-form audio handling
+# VAD automatically chunks the audio, preventing truncation on longer recordings
+timeout 120 "$PARAKEET_BIN" transcribe \
+    --model "$PARAKEET_MODEL" \
+    --input "$FULL_RAW.wav" \
+    --vad \
+    --vad-model "$PARAKEET_VAD_MODEL" \
+    --threads "$WHISPER_THREADS" > "$RAW_TEXT_FILE" 2>/dev/null || true
 
 raw_text="$(cat "$RAW_TEXT_FILE" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ *//; s/ *$//' || true)"
 

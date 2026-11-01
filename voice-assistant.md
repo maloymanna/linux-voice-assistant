@@ -1,6 +1,6 @@
 # Voice Assistant
 
-A lightweight, local voice assistant for Linux using [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for speech-to-text and [Piper TTS](https://github.com/rhasspy/piper) for text-to-speech. No cloud services, no GPU required. Support for **pause**, **resume** and **stop** control words (configurable in the script).
+A lightweight, local voice assistant for Linux using [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for real-time control-word detection and [parakeet.cpp](https://github.com/mudler/parakeet.cpp) for final transcription, with [Piper TTS](https://github.com/rhasspy/piper) for text-to-speech. No cloud services, no GPU required, no Python. Support for **pause**, **resume** and **stop** control words (configurable in the script).
 
 ## Features
 
@@ -15,6 +15,7 @@ A lightweight, local voice assistant for Linux using [whisper.cpp](https://githu
 - **Hotkey Toggle**: Press the shortcut a second time to force-stop recording immediately.
 - **30-Second Safety Cap**: Recording automatically stops after 30 seconds of *active* speaking time.
 - **Fast on CPU**: Uses a pure Bash WAV header generator (sub-5ms) and an overlapping 3-second detection window checked every 0.5s for maximum reliability without heavy CPU usage.
+- **Hybrid STT Pipeline**: whisper.cpp (tiny model) handles the high-frequency control-word checker, while parakeet.cpp (TDT+CTC 110M with Silero VAD) handles the final transcription — non-autoregressive, near-instant, and robust on long recordings.
 - **Clipboard Integration**: Transcribed text is automatically copied to the X11 clipboard.
 - **Desktop Notifications**: Visual toast notifications for "Pausing...", "Resuming...", "Stopping...", and transcription results.
 
@@ -22,6 +23,7 @@ A lightweight, local voice assistant for Linux using [whisper.cpp](https://githu
 
 - Linux with ALSA (`arecord`)
 - `whisper.cpp` built with OpenBLAS (CPU-optimized)
+- `parakeet.cpp` built with OpenBLAS (CPU-optimized)
 - Piper TTS installed
 - Standard GNU coreutils (`tail`, `head`, `cat`, `stat`)
 - `xclip`, `xdotool`, `libnotify-bin` (for clipboard, key release, and desktop notifications)
@@ -45,10 +47,23 @@ cmake -B build \
 cmake --build build -j"$(nproc)"
 ```
 
-### 2. Download models
+### 2. Build parakeet.cpp
+```bash
+cd ~/dev/ai
+git clone https://github.com/mudler/parakeet.cpp.git
+cd parakeet.cpp
+git submodule update --init --recursive
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_OPENBLAS=ON
+cmake --build build -j"$(nproc)"
+# Binary will be at: build/examples/cli/parakeet-cli
+```
+
+### 3. Download models
 
 ```bash
-# Download tiny model (fast, for real-time control-word detection)
+# Whisper tiny model (fast, for real-time control-word detection)
+cd ~/dev/ai/whisper.cpp 
+mkdir -p models
 bash ./models/download-ggml-model.sh tiny.en
 
 # Highly recommended: Download base.en for much better control-word reliability
@@ -57,13 +72,24 @@ bash ./models/download-ggml-model.sh base.en
 # Optionally download small or base for better final transcription accuracy
 bash ./models/download-ggml-model.sh small
 bash ./models/download-ggml-model.sh base.en
+
+# Parakeet hybrid TDT+CTC model (final transcription)
+cd ~/dev/ai/parakeet-cpp
+mkdir -p models
+cd models
+wget "https://huggingface.co/mudler/parakeet-cpp-gguf/resolve/main/tdt_ctc-110m-q8_0.gguf" \
+  -O tdt_ctc-110m-q8_0.gguf
+
+# Silero VAD model (required for robust long-form transcription)
+wget "https://huggingface.co/mudler/parakeet-cpp-gguf/resolve/main/silero-vad-f16.gguf" \
+  -O silero-vad-f16.gguf
 ```
 
-### 3. Install Piper TTS
+### 4. Install Piper TTS
 
 Follow the [Piper installation guide](https://github.com/rhasspy/piper) for your distribution. Ensure the binary is at `~/.local/lib/piper-tts/.venv/bin/piper` or set the PIPER_BIN environment variable.
 
-### 4. Install the script
+### 5. Install the script
 
 ```bash
 chmod +x voice-assistant.sh
@@ -95,6 +121,9 @@ cp voice-assistant.sh ~/.local/bin/
 | `WHISPER_MODEL` | `~/dev/ai/whisper.cpp/models/ggml-tiny.en.bin` | Model for final transcription |
 | `CHECK_MODEL` | `~/dev/ai/whisper.cpp/models/ggml-tiny.en.bin` | Model for stop-word detection |
 | `WHISPER_THREADS` | `$(nproc)` | CPU threads for whisper |
+| `PARAKEET_BIN` | `~/dev/ai/parakeet.cpp/build/examples/cli/parakeet-cli` | Path to parakeet binary |
+| `PARAKEET_MODEL` | `~/dev/ai/tdt_ctc-110m-q8_0.gguf` | Hybrid TDT+CTC model for final transcription |
+| `PARAKEET_VAD_MODEL` | `~/dev/ai/silero-vad-f16.gguf` | Silero VAD model for audio segmentation |
 | `PIPER_BIN` | `~/.local/lib/piper-tts/.venv/bin/piper` | Path to piper TTS binary |
 | `PIPER_VOICE` | `~/.local/share/piper-voices/en_US-lessac-medium.onnx` | Piper voice model |
 | `SLEEPWORD` | `stop` | Word to say to end recording |
@@ -168,6 +197,14 @@ You spoke for less than 1 second, or the microphone is not capturing audio. Chec
 2. **Speak clearly:** Pause slightly before and after saying the control word.
 3. The script now uses a 3-second overlapping window checked every 0.5s, which makes it virtually impossible for a word to be cut in half. If it still misses, the `base.en` model is the definitive fix.
 
+### Parakeet transcription is truncated on long recordings
+
+Ensure the Silero VAD model is present at the path configured in `PARAKEET_VAD_MODEL`.
+
+### "Parakeet binary not found" error
+
+Verify the build succeeded and the binary is at `~/dev/ai/parakeet.cpp/build/examples/cli/parakeet-cli`. Rebuild with:  
+`cd ~/dev/ai/parakeet.cpp && cmake --build build -j"$(nproc)"`
 
 ## License
 
